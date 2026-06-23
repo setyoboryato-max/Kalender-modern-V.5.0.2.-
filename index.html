@@ -165,6 +165,7 @@
         
         .reminder-panel { background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255,255,255,0.03); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
         .reminder-panel h4 { font-size: 0.75rem; color: var(--neon-cyan); text-transform: uppercase; }
+        .reminder-panel h4#reminderTargetTitle { font-size: 0.75rem; color: var(--neon-cyan); text-transform: uppercase; }
         .reminder-input-zone { display: flex; gap: 6px; }
         .reminder-input-zone input { flex-grow: 1; background: #060a12; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; padding: 6px; font-size: 0.75rem; }
         
@@ -450,13 +451,13 @@
     let recognition = null;
     let isJarvisListening = false;
     let activeLoginRole = 'ceo';
-    let jarvisLockTicker = false; // PERBAIKAN: Flag untuk mengunci ticker bar saat Jarvis merespon
+    let jarvisLockTicker = false; 
 
     // Pomodoro Engines Variables
     let pomodoroSecondsLeft = 25 * 60;
     let pomodoroTimerId = null;
     let isPomodoroActive = false;
-    let currentPomodoroMode = 'Focus'; // Focus or Break
+    let currentPomodoroMode = 'Focus'; 
 
     let cryptoPrices = { btc: 68420, eth: 3550, sol: 145, stock: 1250, nvda: 480, aapl: 175, forex: 16250, eur: 1.08, jpy: 157.2 };
     let btcHistory = Array(12).fill(68420);
@@ -468,6 +469,8 @@
     let forexHistory = Array(12).fill(16250);
     let eurHistory = Array(12).fill(1.08);
     let jpyHistory = Array(12).fill(157.2);
+
+    let isFetchingMarket = false; // Flag pengunci bentrokan request
 
     function initAudioContext() {
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -505,7 +508,7 @@
     }
 
     function jarvisSpeak(text) {
-        jarvisLockTicker = true; // Kunci ticker aktif
+        jarvisLockTicker = true; 
         document.getElementById('tickerText').innerText = `[JARVIS AI V2.0]: ${text.toUpperCase()} // PROCEED WITH STABILITY`;
         if ('speechSynthesis' in window) {
             window.speechSynthesis.cancel();
@@ -513,7 +516,6 @@
             msg.lang = 'id-ID';
             msg.rate = 1.0;
             msg.pitch = 1.0;
-            // Lepas kunci ticker 3 detik setelah Jarvis selesai berbicara
             msg.onend = () => { setTimeout(() => { jarvisLockTicker = false; }, 3000); };
             msg.onerror = () => { jarvisLockTicker = false; };
             window.speechSynthesis.speak(msg);
@@ -541,7 +543,6 @@
                 let name = document.getElementById('guestName').value.trim() || "Tamu Terhormat";
                 let type = document.getElementById('guestType').value;
                 
-                // Save guest activity log intel
                 let intelligenceLog = JSON.parse(localStorage.getItem('cyber_visitor_intel')) || [];
                 intelligenceLog.push({ name: name, relationship: type, timestamp: new Date().toLocaleTimeString() });
                 localStorage.setItem('cyber_visitor_intel', JSON.stringify(intelligenceLog));
@@ -550,6 +551,9 @@
             }
         }, 800);
 
+        fetchMarketData().then(() => {
+            updateCryptoEngine();
+        });
         fetchRealtimeCyberData();
         refreshWhaleList();
     }
@@ -586,8 +590,13 @@
         });
     }
 
-    async function updateCryptoEngine() {
-    // 1. FETCH REAL-TIME CRYPTO (CoinGecko API)
+    // ⚡ SEPARATED CORE FETCH ENGINE: Hanya dipanggil berkala (Aman dari 429 Limit)
+
+async function fetchMarketData() {
+    if (isFetchingMarket) return;
+    isFetchingMarket = true;
+    
+    // 1. FETCH CRYPTO (Tetap menggunakan CoinGecko karena gratis tanpa kunci)
     try {
         const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd');
         if (response.ok) {
@@ -597,131 +606,118 @@
             if (data.solana) cryptoPrices.sol = data.solana.usd;
         }
     } catch (e) {
-        console.warn("[CRYPTO ENGINE]: Gagal sinkronisasi data CoinGecko, menggunakan cache lokal.");
+        console.warn("[CRYPTO ENGINE]: Menggunakan data cache siber.");
     }
 
-    // 2. FETCH REAL-TIME VALAS/FOREX (ExchangeRate-API - 100% Gratis)
+    // 2. FETCH SAHAM & VALAS ASLI (Twelve Data Key Resmi Milik Bos)
+    const TWELVE_DATA_KEY = "79ef54b34275440896828a039aa7de8d";
+    
     try {
-        const response = await fetch('https://open.er-api.com/v6/latest/USD');
+        // Mengambil data Saham (NVDA, AAPL) dan Valas (USD/IDR, EUR/USD, USD/JPY) sekaligus dalam 1 kali panggil
+        const response = await fetch(`https://api.twelvedata.com/price?symbol=NVDA,AAPL,USD/IDR,EUR/USD,USD/JPY&apikey=${TWELVE_DATA_KEY}`);
+        
         if (response.ok) {
             const data = await response.json();
-            if (data.rates) {
-                if (data.rates.IDR) cryptoPrices.forex = data.rates.IDR; 
-                if (data.rates.EUR) cryptoPrices.eur = 1 / data.rates.EUR; 
-                if (data.rates.JPY) cryptoPrices.jpy = data.rates.JPY; 
-            }
+            
+            // Masukkan Data Saham Asli
+            if (data.NVDA && data.NVDA.price) cryptoPrices.nvda = parseFloat(data.NVDA.price);
+            if (data.AAPL && data.AAPL.price) cryptoPrices.aapl = parseFloat(data.AAPL.price);
+            // Kalkulasi internal indeks saham gabungan Bos
+            cryptoPrices.stock = (cryptoPrices.nvda * 1.5) + (cryptoPrices.aapl * 2.0);
+
+            // Masukkan Data Valas/Forex Asli
+            if (data['USD/IDR'] && data['USD/IDR'].price) cryptoPrices.forex = parseFloat(data['USD/IDR'].price);
+            if (data['EUR/USD'] && data['EUR/USD'].price) cryptoPrices.eur = parseFloat(data['EUR/USD'].price);
+            if (data['USD/JPY'] && data['USD/JPY'].price) cryptoPrices.jpy = parseFloat(data['USD/JPY'].price);
+
+            // Update text stream siber dengan data bursa riil pasar global
+            document.getElementById('cyberNewsStream').innerText = 
+                `[LIVE MARKET]: Saham NVDA: $${cryptoPrices.nvda.toFixed(1)} | AAPL: $${cryptoPrices.aapl.toFixed(1)} | Kurs USD/IDR: Rp${cryptoPrices.forex.toLocaleString('id-ID')} // SOURCE: TWELVE DATA API`;
         }
     } catch (e) {
-        console.warn("[FOREX ENGINE]: Gagal mengambil kurs global asli.");
+        console.warn("[TWELVE DATA ENGINE]: Gagal sinkronisasi data bursa global.", e);
     }
 
-    // 3. FETCH REAL-TIME STOCKS (Finnhub API)
-    const FINNHUB_API_KEY = "YOUR_FINNHUB_API_KEY_HERE"; // 💡 Ganti dengan API Key gratis dari finnhub.io jika ada
-    
-    if (FINNHUB_API_KEY && FINNHUB_API_KEY !== "YOUR_FINNHUB_API_KEY_HERE") {
-        try {
-            const resNvda = await fetch(`https://finnhub.io/api/v1/quote?symbol=NVDA&token=${FINNHUB_API_KEY}`);
-            if (resNvda.ok) {
-                const dataNvda = await resNvda.json();
-                if (dataNvda.c) cryptoPrices.nvda = dataNvda.c;
-            }
-            const resAapl = await fetch(`https://finnhub.io/api/v1/quote?symbol=AAPL&token=${FINNHUB_API_KEY}`);
-            if (resAapl.ok) {
-                const dataAapl = await resAapl.json();
-                if (dataAapl.c) cryptoPrices.aapl = dataAapl.c;
-            }
-            cryptoPrices.stock = (cryptoPrices.nvda * 1.5) + (cryptoPrices.aapl * 2.0);
-        } catch (e) {
-            console.warn("[STOCKS ENGINE]: Batas limit API tercapai atau putus koneksi.");
-        }
-    } else {
-        // Fallback dinamis jika API key belum diisi
-        let stockChange = (Math.random() - 0.49) * 15;
-        let nvdaChange = (Math.random() - 0.48) * 8;
-        let aaplChange = (Math.random() - 0.49) * 3;
-        
+    isFetchingMarket = false;
+}
+
+    // 🖥️ UI MATRIX RENDERER + MICRO OSCILLATOR: Bergerak responsif 2 detik sekali tanpa macet
+    function updateCryptoEngine() {
+        // Simulasi pergerakan pasar mikro (0.02%) agar grafik bergerak hidup setiap waktu
+        cryptoPrices.btc += (Math.random() - 0.5) * 12;
+        cryptoPrices.eth += (Math.random() - 0.5) * 1.5;
+        cryptoPrices.sol += (Math.random() - 0.5) * 0.15;
+        cryptoPrices.forex += (Math.random() - 0.5) * 4;
+        cryptoPrices.eur += (Math.random() - 0.5) * 0.0001;
+        cryptoPrices.jpy += (Math.random() - 0.5) * 0.04;
+
+        let stockChange = (Math.random() - 0.49) * 2;
+        let nvdaChange = (Math.random() - 0.48) * 0.8;
+        let aaplChange = (Math.random() - 0.49) * 0.3;
         cryptoPrices.stock = Math.max(100, cryptoPrices.stock + stockChange);
         cryptoPrices.nvda = Math.max(10, cryptoPrices.nvda + nvdaChange);
         cryptoPrices.aapl = Math.max(10, cryptoPrices.aapl + aaplChange);
+
+        // ENGINE LOGIKA PANAH INDIKATOR PERHALUS (▲ / ▼ / ■)
+        const calculateArrow = (currentVal, historyArray) => {
+            const lastVal = historyArray[historyArray.length - 1] || currentVal;
+            if (currentVal > lastVal) return `<span style="font-size:0.55rem; color:#00ff41;">▲</span>`;
+            if (currentVal < lastVal) return `<span style="font-size:0.55rem; color:#ff3366;">▼</span>`;
+            return `<span style="font-size:0.55rem; color:var(--text-muted);">■</span>`;
+        };
+
+        let btcArrow = calculateArrow(cryptoPrices.btc, btcHistory);
+        let ethArrow = calculateArrow(cryptoPrices.eth, ethHistory);
+        let solArrow = calculateArrow(cryptoPrices.sol, solHistory);
+        let stockArrow = calculateArrow(cryptoPrices.stock, stockHistory);
+        let nvdaArrow = calculateArrow(cryptoPrices.nvda, nvdaHistory);
+        let aaplArrow = calculateArrow(cryptoPrices.aapl, aaplHistory);
+        let forexArrow = calculateArrow(cryptoPrices.forex, forexHistory);
+        let eurArrow = calculateArrow(cryptoPrices.eur, eurHistory);
+        let jpyArrow = calculateArrow(cryptoPrices.jpy, jpyHistory);
+
+        // INJEKSI AMAN KE UI MATRIX DASHBOARD
+        document.getElementById('btcVal').innerHTML = `$${cryptoPrices.btc.toLocaleString('en-US', {maximumFractionDigits:0})} ${btcArrow}`;
+        document.getElementById('ethVal').innerHTML = `$${cryptoPrices.eth.toLocaleString('en-US', {maximumFractionDigits:0})} ${ethArrow}`;
+        document.getElementById('solVal').innerHTML = `$${cryptoPrices.sol.toFixed(1)} ${solArrow}`;
+        
+        document.getElementById('stockVal').innerHTML = `$${cryptoPrices.stock.toLocaleString('en-US', {maximumFractionDigits:1})} ${stockArrow}`;
+        document.getElementById('nvdaVal').innerHTML = `$${cryptoPrices.nvda.toFixed(1)} ${nvdaArrow}`;
+        document.getElementById('aaplVal').innerHTML = `$${cryptoPrices.aapl.toFixed(1)} ${aaplArrow}`;
+        
+        document.getElementById('forexVal').innerHTML = `Rp${cryptoPrices.forex.toLocaleString('id-ID', {maximumFractionDigits:0})} ${forexArrow}`;
+        document.getElementById('eurVal').innerHTML = `$${cryptoPrices.eur.toFixed(4)} ${eurArrow}`;
+        document.getElementById('jpyVal').innerHTML = `¥${cryptoPrices.jpy.toFixed(2)} ${jpyArrow}`;
+
+        // ENKAPSULASI HISTORI UNTUK SPARKLINE GRAPH
+        const pushToMatrix = (historyArray, value) => {
+            historyArray.push(value);
+            if (historyArray.length > 12) historyArray.shift();
+        };
+
+        pushToMatrix(btcHistory, cryptoPrices.btc);
+        pushToMatrix(ethHistory, cryptoPrices.eth);
+        pushToMatrix(solHistory, cryptoPrices.sol);
+        pushToMatrix(stockHistory, cryptoPrices.stock);
+        pushToMatrix(nvdaHistory, cryptoPrices.nvda);
+        pushToMatrix(aaplHistory, cryptoPrices.aapl);
+        pushToMatrix(forexHistory, cryptoPrices.forex);
+        pushToMatrix(eurHistory, cryptoPrices.eur);
+        pushToMatrix(jpyHistory, cryptoPrices.jpy);
+
+        // RENDERING SEKETIKA KE CANVAS GRAPH
+        drawQuantumChart('btcChart', btcHistory, '#00f2fe');
+        drawQuantumChart('ethChart', ethHistory, '#00f2fe');
+        drawQuantumChart('solChart', solHistory, '#00f2fe');
+        
+        drawQuantumChart('stockChart', stockHistory, '#00ff41');
+        drawQuantumChart('nvdaChart', nvdaHistory, '#00ff41');
+        drawQuantumChart('aaplChart', aaplHistory, '#00ff41');
+        
+        drawQuantumChart('forexChart', forexHistory, '#4facfe');
+        drawQuantumChart('eurChart', eurHistory, '#4facfe');
+        drawQuantumChart('jpyChart', jpyHistory, '#4facfe');
     }
-
-    // 4. AMANKAN FITUR BAWAAN: CYBER NEWS STREAM & WEATHER (Milik Anda)
-    try {
-        const newsItems = [
-            "FED mempertahankan suku bunga makro.", 
-            "Volume perdagangan Quantum AI meningkat 240%.", 
-            "Indeks saham teknologi NVDA memimpin pasar global.",
-            "Keamanan siber enkripsi kuantum mulai diadopsi massal."
-        ];
-        document.getElementById('cyberNewsStream').innerText = `[STREAM]: ${newsItems[Math.floor(Math.random() * newsItems.length)]}`;
-    } catch(e){}
-
-    try {
-        const conditions = ["Cerah Berawan", "Hujan Ringan", "Atmosfer Stabil", "Badai Siber Elektromagnetik"];
-        document.getElementById('weatherStatusText').innerText = conditions[Math.floor(Math.random() * conditions.length)];
-        document.getElementById('weatherTempText').innerText = `${Math.floor(Math.random() * 6) + 27}°C`;
-    } catch(e){}
-
-    // 5. ENGINE LOGIKA PANAH INDIKATOR (▲ / ▼)
-    const calculateArrow = (currentVal, historyArray) => {
-        const lastVal = historyArray[historyArray.length - 1] || currentVal;
-        return currentVal >= lastVal ? 
-            `<span style="font-size:0.55rem; color:#00ff41;">▲</span>` : 
-            `<span style="font-size:0.55rem; color:#ff3366;">▼</span>`;
-    };
-
-    let btcArrow = calculateArrow(cryptoPrices.btc, btcHistory);
-    let ethArrow = calculateArrow(cryptoPrices.eth, ethHistory);
-    let solArrow = calculateArrow(cryptoPrices.sol, solHistory);
-    let stockArrow = calculateArrow(cryptoPrices.stock, stockHistory);
-    let nvdaArrow = calculateArrow(cryptoPrices.nvda, nvdaHistory);
-    let aaplArrow = calculateArrow(cryptoPrices.aapl, aaplHistory);
-    let forexArrow = calculateArrow(cryptoPrices.forex, forexHistory);
-    let eurArrow = calculateArrow(cryptoPrices.eur, eurHistory);
-    let jpyArrow = calculateArrow(cryptoPrices.jpy, jpyHistory);
-
-    // 6. INJEKSI KE UI MATRIX DASHBOARD
-    document.getElementById('btcVal').innerHTML = `$${cryptoPrices.btc.toLocaleString('en-US', {maximumFractionDigits:0})} ${btcArrow}`;
-    document.getElementById('ethVal').innerHTML = `$${cryptoPrices.eth.toLocaleString('en-US', {maximumFractionDigits:0})} ${ethArrow}`;
-    document.getElementById('solVal').innerHTML = `$${cryptoPrices.sol.toFixed(1)} ${solArrow}`;
-    
-    document.getElementById('stockVal').innerHTML = `$${cryptoPrices.stock.toLocaleString('en-US', {maximumFractionDigits:1})} ${stockArrow}`;
-    document.getElementById('nvdaVal').innerHTML = `$${cryptoPrices.nvda.toFixed(1)} ${nvdaArrow}`;
-    document.getElementById('aaplVal').innerHTML = `$${cryptoPrices.aapl.toFixed(1)} ${aaplArrow}`;
-    
-    document.getElementById('forexVal').innerHTML = `Rp${cryptoPrices.forex.toLocaleString('id-ID', {maximumFractionDigits:0})} ${forexArrow}`;
-    document.getElementById('eurVal').innerHTML = `$${cryptoPrices.eur.toFixed(4)} ${eurArrow}`;
-    document.getElementById('jpyVal').innerHTML = `¥${cryptoPrices.jpy.toFixed(2)} ${jpyArrow}`;
-
-    // 7. ENKAPSULASI HISTORI UNTUK SPARKLINE GRAPH
-    const pushToMatrix = (historyArray, value) => {
-        historyArray.push(value);
-        if (historyArray.length > 12) historyArray.shift();
-    };
-
-    pushToMatrix(btcHistory, cryptoPrices.btc);
-    pushToMatrix(ethHistory, cryptoPrices.eth);
-    pushToMatrix(solHistory, cryptoPrices.sol);
-    pushToMatrix(stockHistory, cryptoPrices.stock);
-    pushToMatrix(nvdaHistory, cryptoPrices.nvda);
-    pushToMatrix(aaplHistory, cryptoPrices.aapl);
-    pushToMatrix(forexHistory, cryptoPrices.forex);
-    pushToMatrix(eurHistory, cryptoPrices.eur);
-    pushToMatrix(jpyHistory, cryptoPrices.jpy);
-
-    // 8. RENDERING GRAFIK
-    drawQuantumChart('btcChart', btcHistory, '#00f2fe');
-    drawQuantumChart('ethChart', ethHistory, '#00f2fe');
-    drawQuantumChart('solChart', solHistory, '#00f2fe');
-    
-    drawQuantumChart('stockChart', stockHistory, '#00ff41');
-    drawQuantumChart('nvdaChart', nvdaHistory, '#00ff41');
-    drawQuantumChart('aaplChart', aaplHistory, '#00ff41');
-    
-    drawQuantumChart('forexChart', forexHistory, '#4facfe');
-    drawQuantumChart('eurChart', eurHistory, '#4facfe');
-    drawQuantumChart('jpyChart', jpyHistory, '#4facfe');
-}
 
     function changeChromaProfile(profile) {
         triggerSuccessSound();
@@ -762,12 +758,10 @@
             };
             recognition.onresult = (event) => {
                 const command = event.results[0][0].transcript.toLowerCase();
-                // PERBAIKAN: Tampilkan teks input suara langsung ke tombol untuk feedback visual
                 document.getElementById('jarvisStatusLabel').innerText = `HEARD: "${command.toUpperCase()}"`;
                 processJarvisVoiceCommand(command);
             };
             recognition.onerror = (event) => {
-                // PERBAIKAN: Deteksi error mic langsung di UI
                 document.getElementById('jarvisStatusLabel').innerText = `ERR: ${event.error.toUpperCase()}`;
             };
         } else {
@@ -812,7 +806,6 @@
         let currentUserRole = activeLoginRole; 
         let currentUserName = document.getElementById('guestName').value.trim() || "Tamu";
 
-        // 1. Perintah: Cek Kabar Jarvis
         if (cmd.includes("halo jarvis bagaimana kabarnya") || cmd.includes("apa kabar jarvis")) {
             if (currentUserRole === "ceo") { 
                 jarvisSpeak("Kabar saya selalu luar biasa dan siap melayani Anda, Bos Besar. Bagaimana strategi pasar kita malam ini?");
@@ -822,7 +815,6 @@
             return;
         }
 
-        // 2. Perintah: Cek Status Sistem
         if (cmd.includes("coba cek sistem jarvis") || cmd.includes("cek sistem")) {
             if (currentUserRole === "ceo") {
                 jarvisSpeak("Memulai pemindaian kuantum... Koneksi API aktif, enkripsi lokal 100 persen aman, dan performa engine stabil. Semua siap tempur, Bos!");
@@ -832,7 +824,6 @@
             return;
         }
 
-        // 3. Perintah: Merespon Balik Sapaan Jarvis (PERBAIKAN: Menghilangkan tanda hubung strip)
         if (cmd.includes("baik baik saja") || cmd.includes("saya baik saja") || cmd.includes("baik saja jarvis")) {
             if (currentUserRole === "ceo") {
                 jarvisSpeak("Senang mendengarnya, Bos. Selalu jaga kondisi Anda selagi kita memantau pergerakan Whale malam ini.");
@@ -842,7 +833,6 @@
             return;
         }
 
-        // 4. Perintah: Ucapan Terima Kasih
         if (cmd.includes("terima kasih jarvis") || cmd.includes("terima kasih informasinya jarvis")) {
             if (currentUserRole === "ceo") {
                 jarvisSpeak("Sama-sama, Bos Besar. Sudah menjadi tugas utama saya untuk selalu siaga di sisi Anda.");
@@ -860,7 +850,9 @@
         }
         
         if (cmd.includes("baca agenda") || cmd.includes("jadwal hari ini")) {
-            let todayStr = `${currentActiveDate.getFullYear()}-${String(currentActiveDate.getMonth() + 1).padStart(2, '0')}-${String(currentActiveDate.getDate()).padStart(2, '0')}`;
+            // PERBAIKAN BUG: Gunakan tanggal asli berjalan (new Date), bukan variabel penjelajah bulan
+            let realToday = new Date();
+            let todayStr = `${realToday.getFullYear()}-${String(realToday.getMonth() + 1).padStart(2, '0')}-${String(realToday.getDate()).padStart(2, '0')}`;
             let list = savedReminders[todayStr] || [];
             if(list.length === 0) {
                 jarvisSpeak("Sistem mendeteksi matriks agenda Anda hari ini masih kosong bersih, Bos.");
@@ -896,7 +888,6 @@
         if (cmd.includes("matrix") || cmd.includes("hijau")) changeChromaProfile('matrix');
         else if (cmd.includes("cyber") || cmd.includes("merah")) changeChromaProfile('cyber');
         else if (cmd.includes("tokyo") || cmd.includes("ungu")) changeChromaProfile('tokyo');
-        /* INTEGRASI PERINTAH SUARA TEMA BARU */
         else if (cmd.includes("kuning") || cmd.includes("yellow")) changeChromaProfile('yellow');
         else if (cmd.includes("pink") || cmd.includes("merah muda")) changeChromaProfile('pink');
         else if (cmd.includes("purple") || cmd.includes("violet")) changeChromaProfile('purple');
@@ -1006,7 +997,9 @@
                 alarmInterval = setInterval(() => { playBeepSound(880, 0.12, 'sawtooth'); }, 400);
             }
         }, 1000);
-        setInterval(updateCryptoEngine, 4000);
+        
+        // PERBAIKAN UTAMA: Hanya jalankan visual ticks lokal setiap 2 detik (Mencegah Lag/Spam Server API)
+        setInterval(updateCryptoEngine, 2000); 
     }
 
     function initAlarmInterface() {
@@ -1149,17 +1142,8 @@
         }
     }
 
+    // PERBAIKAN LUAR: Fungsi ini sekarang fokus menangani berita siber & cuaca saja secara bersih
     async function fetchRealtimeCyberData() {
-        try {
-            const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd');
-            if (response.ok) {
-                const data = await response.json();
-                if(data.bitcoin) cryptoPrices.btc = data.bitcoin.usd;
-                if(data.ethereum) cryptoPrices.eth = data.ethereum.usd;
-                if(data.solana) cryptoPrices.sol = data.solana.usd;
-            }
-        } catch (e) {}
-
         try {
             const newsItems = [
                 "FED mempertahankan suku bunga makro.", 
@@ -1170,24 +1154,57 @@
             document.getElementById('cyberNewsStream').innerText = `[STREAM]: ${newsItems[Math.floor(Math.random() * newsItems.length)]}`;
         } catch(e){}
 
-        try {
-            const conditions = ["Cerah Berawan", "Hujan Ringan", "Atmosfer Stabil", "Badai Siber Elektromagnetik"];
-            document.getElementById('weatherStatusText').innerText = conditions[Math.floor(Math.random() * conditions.length)];
-            document.getElementById('weatherTempText').innerText = `${Math.floor(Math.random() * 6) + 27}°C`;
-        } catch(e){}
-    }
+// --- SENSOR CUACA & THERMAL REAL-TIME (OPEN-METEO) ---
+try {
+    // Kustomisasi Koordinat: Saat ini disetel default untuk JAKARTA (Lat: -6.2088, Lon: 106.8456)
+    // Bos bisa mengganti angka latitude & longitude di bawah ini sesuai koordinat kota tempat tinggal Bos!
+    const latitude = "-6.2088"; 
+    const longitude = "106.8456";
 
-window.onload = () => { 
-    initCalendar(); 
-    initAlarmInterface(); 
-    startLiveClock(); 
-    updateCryptoEngine(); 
+    const weatherResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,weather_code`);
     
-    // TONGKAT REFRESH OTOMATIS
-    setInterval(updateCryptoEngine, 60000); // Otomatis update data pasar setiap 60 detik
-    setInterval(fetchRealtimeCyberData, 30000); // Otomatis update data siber setiap 30 detik
-};
+    if (weatherResponse.ok) {
+        const weatherData = await weatherResponse.json();
+        const thermalSuhu = weatherData.current.temperature_2m; // Mengambil data Thermal/Suhu asli
+        const kodeCuaca = weatherData.current.weather_code;     // Mengambil kode kondisi langit
 
+        // Penerjemah otomatis dari kode satelit internasional ke Bahasa Indonesia
+        let statusKondisi = "Atmosfer Stabil";
+        if (kodeCuaca === 0) statusKondisi = "Cerah Benderang";
+        else if (kodeCuaca >= 1 && kodeCuaca <= 3) statusKondisi = "Cerah Berawan";
+        else if (kodeCuaca === 45 || kodeCuaca === 48) statusKondisi = "Udara Berkabut";
+        else if (kodeCuaca >= 51 && kodeCuaca <= 55) statusKondisi = "Gerimis Tipis";
+        else if (kodeCuaca >= 61 && kodeCuaca <= 65) statusKondisi = "Hujan Turun";
+        else if (kodeCuaca >= 80 && kodeCuaca <= 82) statusKondisi = "Hujan Curah Deras";
+        else if (kodeCuaca >= 95) statusKondisi = "Badai Petir / Thunderstorm";
+
+        // Suntikkan data asli ke komponen UI Dashboard Bos
+        document.getElementById('weatherStatusText').innerText = statusKondisi;
+        document.getElementById('weatherTempText').innerText = `${Math.round(thermalSuhu)}°C`;
+    }
+} catch (e) {
+    console.warn("[WEATHER ENGINE]: Gagal sinkronisasi satelit cuaca, mengaktifkan mode radar cadangan.");
+    // Cadangan otomatis jika internet tiba-tiba putus agar dashboard tidak kosong/error
+    document.getElementById('weatherStatusText').innerText = "Radar Off-line";
+    document.getElementById('weatherTempText').innerText = "28°C";
+}
+}
+
+    window.onload = () => { 
+        initCalendar(); 
+        initAlarmInterface(); 
+        startLiveClock(); 
+        
+        // Pemuatan data internet pertama kali
+        fetchMarketData().then(() => {
+            updateCryptoEngine(); 
+        });
+        fetchRealtimeCyberData();
+        
+        // REFRESH ENGINE AMAN: Update data hulu asli berkala (Bebas dari limit server)
+        setInterval(fetchMarketData, 60000); 
+        setInterval(fetchRealtimeCyberData, 30000); 
+    };
 </script>
 </body>
 </html>
